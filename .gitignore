@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+logs/
+test_outputs/
+*.json
+!examples/workflows/*.json
+BENCHMARK-RTX2080TI-INT8.md

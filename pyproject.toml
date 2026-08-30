@@ -1,0 +1,24 @@
+[project]
+name = "minimax-h3-enhanced-loader-star7"
+version = "1.2.4"
+description = "Architecture-aware ComfyUI loader for official, third-party, quantized, and FastH3 MiniMax H3 models, with integrated FP16 protection and VSA support."
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: AMD ROCm",
+]
+
+[project.urls]
+Repository = "https://github.com/star7code/minimax-h3-enhanced-loader-star7"
+Documentation = "https://github.com/star7code/minimax-h3-enhanced-loader-star7#readme"
+"Bug Tracker" = "https://github.com/star7code/minimax-h3-enhanced-loader-star7/issues"
+FastVideo = "https://github.com/hao-ai-lab/FastVideo"
+"FP16 Method" = "https://github.com/Amduraznak/minimax-h3-fp16-fix"
+
+[tool.comfy]
+PublisherId = "star7code"
+DisplayName = "MiniMax H3 Enhanced Loader - Star7"
