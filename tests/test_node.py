@@ -257,11 +257,18 @@ def test_fasth3_modulation_fuses_only_scalar_segments():
 def test_hardware_policy_uses_capability_not_product_names():
     module = load_nodes()
     assert module.detect_hardware_policy(
-        cuda_available=True, hip=None, capability=(8, 0)
+        cuda_available=True, hip=None, capability=(8, 0), force_fp16=False
     )["name"] == "native_bf16"
     assert module.detect_hardware_policy(
-        cuda_available=True, hip=None, capability=(12, 0)
+        cuda_available=True, hip=None, capability=(12, 0), force_fp16=False
     )["name"] == "native_bf16"
+    sm80_fp16 = module.detect_hardware_policy(
+        cuda_available=True, hip=None, capability=(8, 0), force_fp16=True
+    )
+    assert sm80_fp16["name"] == "native_bf16"
+    assert sm80_fp16["apply_fp16_exact"] is False
+    assert sm80_fp16["launcher_fp16_overridden"] is True
+    assert "corrected to native BF16" in sm80_fp16["reason"]
     assert module.detect_hardware_policy(
         cuda_available=True, hip=None, capability=(7, 5)
     )["name"] == "fp16_compat"
@@ -288,7 +295,11 @@ def test_native_bf16_policy_skips_fp16_wrappers():
         mock.patch.object(module, "_load_h3_native_fp16") as fp16_load,
     ):
         assert module.load_model_with_policy("h3.safetensors") is loaded
-    native_load.assert_called_once_with("h3.safetensors", disable_dynamic=False)
+    native_load.assert_called_once_with(
+        "h3.safetensors",
+        model_options={"dtype": torch.bfloat16},
+        disable_dynamic=False,
+    )
     fp16_load.assert_not_called()
 
 
@@ -382,7 +393,9 @@ def test_fasth3_dense_load_records_sampling_metadata_without_scheduler_patch():
         module._load_fasth3_directory,
         (str(info.root),),
     )
-    assert load_model.call_args.kwargs["model_options"] == {}
+    assert load_model.call_args.kwargs["model_options"] == {
+        "dtype": torch.bfloat16,
+    }
     assert load_model.call_args.kwargs["disable_dynamic"] is False
     patch_model.assert_called_once_with(
         model,

@@ -29,7 +29,7 @@ from . import fasth3_modulation
 from . import fasth3_vsa
 
 
-NODE_VERSION = "1.2.4"
+NODE_VERSION = "1.2.5"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 FAST_H3_PATCH_FLAG = "star7_fasth3_mlp_layout_v2"
@@ -292,7 +292,7 @@ def _format_quantization(formats):
 
 
 def detect_hardware_policy(
-    *, cuda_available=None, hip=_AUTO_DETECT, capability=None
+    *, cuda_available=None, hip=_AUTO_DETECT, capability=None, force_fp16=None
 ):
     """Select precision by capability features, never by product name."""
     if cuda_available is None:
@@ -316,10 +316,19 @@ def detect_hardware_policy(
     capability = tuple(capability)
     label = f"sm{capability[0]}{capability[1]}"
     if capability[0] >= 8:
+        if force_fp16 is None:
+            force_fp16 = bool(
+                getattr(comfy.model_management.args, "fp16_unet", False)
+            )
         return {
             "name": "native_bf16",
             "apply_fp16_exact": False,
-            "reason": f"{label} supports native BF16",
+            "launcher_fp16_overridden": bool(force_fp16),
+            "reason": (
+                f"{label} launcher FP16 override corrected to native BF16 for H3"
+                if force_fp16
+                else f"{label} supports native BF16"
+            ),
         }
     if capability == (6, 1):
         return {
@@ -332,6 +341,13 @@ def detect_hardware_policy(
         "apply_fp16_exact": True,
         "reason": label,
     }
+
+
+def _native_model_options(policy):
+    """Pin BF16-capable H3 hardware to BF16 despite global FP16 flags."""
+    if policy.get("name") == "native_bf16":
+        return {"dtype": torch.bfloat16}
+    return {}
 
 
 def _patch_h3_model(
@@ -988,7 +1004,7 @@ def _load_fasth3_directory(directory):
     gate_states = _split_vsa_gate_state(state_dict) if info.requires_vsa else None
     model_config = _detect_h3_config(state_dict, {})
     policy = detect_hardware_policy()
-    model_options = {}
+    model_options = _native_model_options(policy)
     if policy["apply_fp16_exact"]:
         load_device = comfy.model_management.get_torch_device()
         operations = comfy.ops.pick_operations(
@@ -1050,7 +1066,7 @@ def _load_fasth3_vsa_single_file(unet_path, manifest):
     gate_states = _split_vsa_gate_state(state_dict)
     model_config = _detect_h3_config(state_dict, metadata)
     policy = detect_hardware_policy()
-    model_options = {}
+    model_options = _native_model_options(policy)
     if policy["apply_fp16_exact"]:
         load_device = comfy.model_management.get_torch_device()
         operations = comfy.ops.pick_operations(
@@ -1115,12 +1131,18 @@ def load_model_with_policy(source_name):
         )
         model = _load_h3_native_fp16(path, fast_h3=is_fast_h3)
     else:
+        native_options = _native_model_options(policy)
         logging.info(
-            "[Star7 H3 Enhanced] Loading native H3 with ComfyUI default precision "
+            "[Star7 H3 Enhanced] Loading native H3 with %s "
             "| %s | no FP16 block wrappers",
+            "explicit BF16 compute" if native_options else "ComfyUI default precision",
             policy["reason"],
         )
-        model = comfy.sd.load_diffusion_model(path, disable_dynamic=False)
+        model = comfy.sd.load_diffusion_model(
+            path,
+            model_options=native_options,
+            disable_dynamic=False,
+        )
         if is_fast_h3:
             model = _patch_h3_model(
                 model,

@@ -12,7 +12,7 @@ This project incorporates the complete loading and numerical-protection function
 |---|---|
 | Unified loading | Loads native H3 files, third-party full checkpoints, MixedPrecisionOps quantized models, and FastH3 from one node |
 | Structural detection | Identifies base H3, quantized H3, FastH3 Dense, and FastH3 VSA from weights and metadata rather than a filename whitelist |
-| Architecture-aware policy | Keeps the native BF16/default path on SM80+ and enables FP16 numerical protection only where required |
+| Architecture-aware policy | Always uses native BF16 on SM80+ and overrides a global FP16 launcher setting for H3 only |
 | Quantization preservation | Retains INT8, ConvRot, quantized layouts, and `_quantization_metadata` without expanding the full model to dense FP16 |
 | Third-party compatibility | Supports structurally compatible fine-tuned, merged, pruned, and quantized full H3 checkpoints |
 | FP16 protection | Protects H3 attention, residual, and MLP computations from FP16 overflow/non-finite values without replacing the sampler or attention backend |
@@ -87,13 +87,13 @@ The protected `out_proj` scale is `64` and the MLP `fc2` scale is `256`. Both ar
 
 | Environment | Policy |
 |---|---|
-| NVIDIA SM80+ | Native ComfyUI BF16/default precision; no unnecessary FP16 block wrappers |
+| NVIDIA SM80+ | Explicit BF16; a global `--fp16-unet` is corrected for H3 only, while quantized dispatch remains intact |
 | NVIDIA SM60/SM70/SM75 and similar | FP16 compatibility protection |
 | NVIDIA SM61 | Native default path to avoid its low FP16 throughput |
 | AMD ROCm | FP16 compatibility path, subject to the installed PyTorch and ComfyUI stack |
 | CPU / no CUDA | Native ComfyUI default path |
 
-The enhanced loader can therefore replace `minimax-h3-fp16-exact-star7` in new workflows without imposing its legacy-architecture overhead on SM80+ users.
+The enhanced loader can therefore replace `minimax-h3-fp16-exact-star7` in new workflows. SM80+ users get no FP16 block wrappers; use the separate Native FP16 Loader only when protected FP16 is explicitly desired.
 
 ## FastH3 VSA Switch
 

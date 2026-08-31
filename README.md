@@ -14,7 +14,7 @@
 |---|---|
 | 统一模型载入 | 使用一个节点载入原生 H3、第三方完整模型、MixedPrecisionOps 量化模型和 FastH3 |
 | 模型结构识别 | 根据权重结构与 metadata 识别普通 H3、量化 H3、FastH3 Dense 和 FastH3 VSA，不依赖固定文件名 |
-| 架构自适应 | SM80+ 保留 ComfyUI 原生 BF16/默认路径；需要兼容保护的架构自动使用 FP16 数值保护 |
+| 架构自适应 | SM80+ 始终采用原生 BF16，并自动覆盖只针对 H3 不合适的全局 FP16 启动参数 |
 | 量化路径保持 | 保留 INT8、ConvRot、量化 layout 与 `_quantization_metadata`，不会因启用兼容保护而把整模强制展开为 FP16 |
 | 第三方模型兼容 | 支持结构符合 ComfyUI MiniMax H3 的第三方微调、融合、剪枝和量化完整模型 |
 | FP16 数值保护 | 修复部分架构上 H3 attention、残差与 MLP 的 FP16 溢出/非有限值问题，不接管采样器或注意力算法 |
@@ -93,13 +93,13 @@ FastH3 是完整的少步蒸馏 Transformer，不是运行时必须额外加载�
 
 | 环境 | 策略 |
 |---|---|
-| NVIDIA SM80+ | 使用 ComfyUI 原生 BF16/默认精度，不增加无必要的 FP16 block 包装 |
+| NVIDIA SM80+ | 始终显式使用 BF16；检测到全局 `--fp16-unet` 时仅对 H3 自动纠正，量化分发保持不变 |
 | NVIDIA SM60、SM70、SM75 等 | 使用 FP16 compatibility 数值保护 |
 | NVIDIA SM61 | 保留默认路径，避免低 FP16 吞吐造成明显倒退 |
 | AMD ROCm | 使用 FP16 compatibility 路径，具体可用性取决于 PyTorch 与 ComfyUI 环境 |
 | CPU / 无 CUDA | 保留 ComfyUI 默认路径 |
 
-因此，本节点可以完全替代 `minimax-h3-fp16-exact-star7` 在新工作流中的位置，同时不会让 SM80+ 用户承担原本只针对旧架构的额外计算。
+因此，本节点可以完全替代 `minimax-h3-fp16-exact-star7` 在新工作流中的位置。SM80+ 不增加 FP16 block 包装；明确需要测试受保护 FP16 时可改用独立的 Native FP16 Loader。
 
 ## FastH3 VSA Switch
 
