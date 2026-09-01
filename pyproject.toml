@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3-enhanced-loader-star7"
-version = "1.2.5"
+version = "1.2.6"
 description = "Architecture-aware ComfyUI loader for official, third-party, quantized, and FastH3 MiniMax H3 models, with integrated FP16 protection and VSA support."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

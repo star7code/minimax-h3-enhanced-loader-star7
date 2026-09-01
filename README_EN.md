@@ -55,14 +55,28 @@ Recommended FastH3 contract:
 
 ## Companion models
 
-Two single-file models are planned for Hugging Face distribution:
+Both single-file models are available from
+[suanyu/MiniMax-H3-Star7-INT8](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/tree/main):
 
 | File | Variant | Quantization | Usage |
 |---|---|---|---|
 | `FastH3-Dense-v1-Star7-INT8.safetensors` | `fasth3_dense_v1` | TensorWise INT8 + ConvRot | Select directly in the enhanced loader; do not use the VSA Switch |
 | `FastH3-VSA-DataFree-v1-Star7-INT8.safetensors` | `fasth3_vsa_datafree_v1` | TensorWise INT8 + ConvRot | Load with the enhanced loader, then connect the VSA Switch |
 
-Both are complete single-file Transformers and do not require users to download and convert the original shards. Embedded metadata identifies the variant, quantization format, and four-step sampling contract. Each final model page will include provenance, conversion details, SHA-256, licensing information, and a recommended workflow.
+Both are complete single-file Transformers and do not require users to download and convert the original shards. Embedded metadata identifies the variant, quantization format, and four-step sampling contract.
+
+- [Download the FastH3 Dense single-file model](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/blob/main/FastH3-Dense-v1-Star7-INT8.safetensors)
+- [Download the FastH3 VSA DataFree single-file model](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/blob/main/FastH3-VSA-DataFree-v1-Star7-INT8.safetensors)
+- [Quark mirror](https://pan.quark.cn/s/27f28ba550dc)
+
+## Example workflows
+
+The repository includes four release workflows, with Chinese and English versions for both general H3 and FastH3 VSA:
+
+- `MiniMax-H3-Enhanced-Loader-General-Star7.json`
+- `MiniMax-H3-Enhanced-Loader-General-Star7-English.json`
+- `MiniMax-H3-Enhanced-Loader-FastH3-VSA-Star7.json`
+- `MiniMax-H3-Enhanced-Loader-FastH3-VSA-Star7-English.json`
 
 ## Quantization and LoRA
 

@@ -59,14 +59,28 @@ FastH3 是完整的少步蒸馏 Transformer，不是运行时必须额外加载�
 
 ## 配套模型
 
-后续 Hugging Face 发布将提供两个可由本节点直接识别的单文件模型：
+两个可由本节点直接识别的单文件模型已发布到
+[suanyu/MiniMax-H3-Star7-INT8](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/tree/main)：
 
 | 文件 | 变体 | 量化 | 加载方式 |
 |---|---|---|---|
 | `FastH3-Dense-v1-Star7-INT8.safetensors` | `fasth3_dense_v1` | TensorWise INT8 + ConvRot | 直接在增强载入节点中选择；不使用 VSA Switch |
 | `FastH3-VSA-DataFree-v1-Star7-INT8.safetensors` | `fasth3_vsa_datafree_v1` | TensorWise INT8 + ConvRot | 增强载入后连接 VSA Switch |
 
-两者均为完整 Transformer 单文件，不要求用户下载原始分片后再转换。模型内 metadata 用于标识变体、量化方式和四步采样契约；正式模型页将同时提供来源、转换说明、SHA-256、许可证与推荐工作流。
+两者均为完整 Transformer 单文件，不要求用户下载原始分片后再转换。模型内 metadata 用于标识变体、量化方式和四步采样契约。
+
+- [FastH3 Dense 单文件下载](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/blob/main/FastH3-Dense-v1-Star7-INT8.safetensors)
+- [FastH3 VSA DataFree 单文件下载](https://huggingface.co/suanyu/MiniMax-H3-Star7-INT8/blob/main/FastH3-VSA-DataFree-v1-Star7-INT8.safetensors)
+- [夸克网盘备用地址](https://pan.quark.cn/s/27f28ba550dc)
+
+## 示例工作流
+
+仓库提供四份正式工作流，通用 H3 与 FastH3 VSA 各有中英文版本：
+
+- `MiniMax-H3-Enhanced-Loader-General-Star7.json`
+- `MiniMax-H3-Enhanced-Loader-General-Star7-English.json`
+- `MiniMax-H3-Enhanced-Loader-FastH3-VSA-Star7.json`
+- `MiniMax-H3-Enhanced-Loader-FastH3-VSA-Star7-English.json`
 
 ## 量化兼容与 LoRA
 
