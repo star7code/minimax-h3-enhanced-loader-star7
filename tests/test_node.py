@@ -48,6 +48,7 @@ def test_registration():
     module = load_nodes()
     assert set(module.NODE_CLASS_MAPPINGS) == {
         "MiniMaxH3EnhancedLoaderStar7",
+        "MiniMaxH3FastH3AdapterLoaderStar7",
         "MiniMaxH3VSASwitchStar7",
     }
     for display_name in module.NODE_DISPLAY_NAME_MAPPINGS.values():

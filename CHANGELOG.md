@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 - 2026-09-02
+
+- 新增 `MiniMax H3 FastH3 Adapter Loader - Star7`，完整支持 FastVideo
+  `fastvideo-lora-v2` 复合 Adapter 的低秩权重、Dense/Bias Delta 与 50 个
+  VSA replacement gate，不再把它误当作普通 LoRA。
+- Adapter 使用 header-first 校验；残缺 QKV、未知载荷或不完整 VSA gate 会在
+  执行前给出明确错误。检测到 gate 后自动启用 VSA，输出保持标准 `MODEL`。
+- FastH3 目录识别改为版本化白名单，新增官方 Preview v0.1/v0.2 modular
+  Diffusers 目录支持，同时保留严格架构及四步采样契约校验。
+- 新版官方分片允许 Q/K/V 跨相邻 shard：转换时只暂存尚未凑齐的 QKV 组，
+  不复制完整模型；同时支持 v0.x 内嵌的 BF16 VSA gate 与原有 INT8 gate。
+- 节点运行版本与 changelog 统一为 1.3.0。
+
 ## 1.2.6 - 2026-09-01
 
 - 发布通用 H3 与 FastH3 VSA 两套正式工作流，并分别提供中英文版本。

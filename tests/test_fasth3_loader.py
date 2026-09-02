@@ -185,9 +185,86 @@ def test_unknown_dense_variant_fails_clearly():
         try:
             module.detect_fasth3_checkpoint(root)
         except ValueError as exc:
-            assert "supports only the official FastH3 Dense Preview v1" in str(exc)
+            assert "verified official FastH3 Preview releases" in str(exc)
         else:
             raise AssertionError("Unknown model variant did not fail")
+
+
+def test_official_v02_modular_directory_is_versioned():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        module = load_module()
+        transformer = root / "transformer"
+        transformer.mkdir(parents=True)
+        (transformer / "config.json").write_text(
+            json.dumps(official_config()), encoding="utf-8"
+        )
+        v02_index = official_index()
+        for index in range(50):
+            v02_index["weight_map"][
+                f"transformer_blocks.{index}.attn.to_gate_compress.weight"
+            ] = "diffusion_pytorch_model-00001-of-00014.safetensors"
+        (transformer / module.INDEX_NAME).write_text(
+            json.dumps(v02_index), encoding="utf-8"
+        )
+        modular = {
+            "_class_name": "MiniMaxH3ModularPipeline",
+            "transformer": [
+                "diffusers", "MiniMaxH3Transformer3DModel",
+                {
+                    "pretrained_model_name_or_path":
+                        "FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2",
+                    "subfolder": "transformer",
+                },
+            ],
+        }
+        (root / "modular_model_index.json").write_text(
+            json.dumps(modular), encoding="utf-8"
+        )
+        info = module.detect_fasth3_checkpoint(root)
+        assert info.variant == "fasth3_vsa_v0_2"
+        assert info.sampling_profile == "fasth3_4step_v0_2"
+        assert info.requires_vsa is True
+
+
+def test_v02_gate_maps_to_native_vsa_weight():
+    module = load_module()
+    source = {
+        "transformer_blocks.0.attn.to_gate_compress.weight": torch.zeros(4, 3)
+    }
+    converted, unexpected = module.convert_fasth3_state_dict(source)
+    assert unexpected == ()
+    assert "blocks.0.attn.gate_compress.weight" in converted
+
+
+def test_cross_shard_qkv_uses_bounded_pending_group():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        module, _config, index = write_fixture(root)
+        weight_map = index["weight_map"]
+        shard_a = "diffusion_pytorch_model-00001-of-00002.safetensors"
+        shard_b = "diffusion_pytorch_model-00002-of-00002.safetensors"
+        for key in weight_map:
+            weight_map[key] = shard_a
+        weight_map["transformer_blocks.0.attn.to_v.weight"] = shard_b
+        (root / "transformer" / module.INDEX_NAME).write_text(
+            json.dumps(index), encoding="utf-8"
+        )
+        for name in (shard_a, shard_b):
+            (root / "transformer" / name).touch()
+        info = module.detect_fasth3_checkpoint(root)
+
+        def fake_load(path):
+            name = Path(path).name
+            return {
+                key: torch.zeros((1, 1))
+                for key, filename in weight_map.items()
+                if filename == name
+            }
+
+        state, report = module.load_fasth3_shards(info, load_file=fake_load)
+        assert report.valid
+        assert state["blocks.0.attn.qkv_proj.weight"].shape == (3, 1)
 
 
 if __name__ == "__main__":
@@ -197,4 +274,7 @@ if __name__ == "__main__":
     test_missing_and_unexpected_keys_are_reported()
     test_vsa_is_detected_and_requires_complete_shards()
     test_unknown_dense_variant_fails_clearly()
+    test_official_v02_modular_directory_is_versioned()
+    test_v02_gate_maps_to_native_vsa_weight()
+    test_cross_shard_qkv_uses_bounded_pending_group()
     print("FastH3 Enhanced Loader mapping tests passed")

@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import os
+import sys
 import time
 import weakref
 from collections import Counter
@@ -25,11 +26,12 @@ from .fasth3_loader import (
     load_fasth3_shards,
     scan_fasth3_directories,
 )
+from .fasth3_adapter import load_adapter_payload
 from . import fasth3_modulation
 from . import fasth3_vsa
 
 
-NODE_VERSION = "1.2.5"
+NODE_VERSION = "1.3.0"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 FAST_H3_PATCH_FLAG = "star7_fasth3_mlp_layout_v2"
@@ -40,6 +42,87 @@ _AUTO_DETECT = object()
 FAST_H3_FUSED_INT8_FC2_ENV = "STAR7_FASTH3_FUSED_INT8_FC2"
 FAST_H3_FUSED_MODULATION_ENV = "STAR7_FASTH3_FUSED_MODULATION"
 _ROPE_DISPATCH_RESTORED = False
+
+_PROCESS_WIDE_CONFLICT_MARKERS = (
+    "comfyui-minimax-h3-turing",
+    "comfyui_minimax_h3_turing",
+)
+
+
+def _callable_source(value):
+    function = getattr(value, "__func__", value)
+    code = getattr(function, "__code__", None)
+    return str(getattr(code, "co_filename", "") or "").replace("\\", "/").lower()
+
+
+def _is_conflicting_callable(value):
+    source = _callable_source(value)
+    return any(marker in source for marker in _PROCESS_WIDE_CONFLICT_MARKERS)
+
+
+def _neutralize_process_wide_h3_conflicts():
+    """Restore H3 core methods saved by the foreign monkey patch and continue."""
+    conflicts = []
+    for module in tuple(sys.modules.values()):
+        source = str(getattr(module, "__file__", "") or "").replace("\\", "/").lower()
+        name = str(getattr(module, "__name__", "") or "").lower()
+        if any(marker in source or marker in name for marker in _PROCESS_WIDE_CONFLICT_MARKERS):
+            conflicts.append(module)
+    if not conflicts:
+        return False
+
+    import comfy.ldm.minimax.model as minimax_module
+    if getattr(minimax_module, "_star7_turing_plugin_neutralized", False):
+        return True
+
+    restore_map = (
+        (minimax_module.MiniMaxH3Model, "__init__", "_orig_model_init"),
+        (minimax_module.MLP, "forward", "_orig_mlp_forward"),
+        (minimax_module.DiTBlock, "forward", "_orig_block_forward"),
+        (minimax_module.Attention, "forward", "_orig_attention_forward"),
+        (minimax_module.Attention, "forward", "_orig_attn_forward"),
+    )
+    restored = 0
+    for owner, attribute, saved_name in restore_map:
+        candidates = [getattr(module, saved_name, None) for module in conflicts]
+        original = next(
+            (candidate for candidate in candidates if callable(candidate) and not _is_conflicting_callable(candidate)),
+            None,
+        )
+        if original is not None and _is_conflicting_callable(getattr(owner, attribute, None)):
+            setattr(owner, attribute, original)
+            restored += 1
+
+    logging.warning(
+        "[Star7 H3 Compatibility] 检测到插件冲突：comfyui-minimax-h3-turing 已被屏蔽，"
+        "本次继续使用 Star7 路线（已恢复 %d 个全局 H3 方法）。请停用该 Turing 插件并重启；"
+        "仅绕过它的节点无效。",
+        restored,
+    )
+    minimax_module._star7_turing_plugin_neutralized = True
+    return True
+
+
+def _strip_conflicting_instance_forwards(diffusion_model):
+    """Unwrap direct instance forwards installed while the foreign patch was active."""
+    for module in diffusion_model.modules():
+        current = vars(module).get("forward")
+        if current is None or not _is_conflicting_callable(current):
+            continue
+        function = getattr(current, "__func__", current)
+        candidates = list(getattr(function, "__defaults__", ()) or ())
+        candidates.extend(
+            cell.cell_contents for cell in (getattr(function, "__closure__", ()) or ())
+        )
+        original = next(
+            (candidate for candidate in candidates if callable(candidate) and not _is_conflicting_callable(candidate)),
+            None,
+        )
+        if original is not None:
+            module.forward = original
+    for block in getattr(diffusion_model, "blocks", ()):
+        if hasattr(block, "_h3_fp16_fix"):
+            block._h3_fp16_fix = False
 
 
 def _restore_upstream_rope_dispatch():
@@ -353,10 +436,12 @@ def _native_model_options(policy):
 def _patch_h3_model(
     model, loader_native=False, *, fast_h3=False, apply_fp16_exact=True
 ):
+    _neutralize_process_wide_h3_conflicts()
     import comfy.ldm.minimax.model as minimax_module
 
     patched = model.clone()
     diffusion_model = patched.get_model_object("diffusion_model")
+    _strip_conflicting_instance_forwards(diffusion_model)
     if not isinstance(diffusion_model, minimax_module.MiniMaxH3Model):
         raise TypeError("Connected model is not native ComfyUI MiniMax H3")
 
@@ -584,11 +669,19 @@ def _split_vsa_gate_state(state_dict):
     for index in range(50):
         prefix = f"blocks.{index}.attn.gate_compress."
         gate = {}
-        for name in ("weight", "weight_scale", "comfy_quant"):
-            key = prefix + name
-            if key not in state_dict:
-                raise ValueError(f"FastH3 VSA gate tensor is missing: {key}")
-            gate[name] = state_dict.pop(key)
+        weight_key = prefix + "weight"
+        if weight_key not in state_dict:
+            raise ValueError(f"FastH3 VSA gate tensor is missing: {weight_key}")
+        gate["weight"] = state_dict.pop(weight_key)
+        quant_keys = (prefix + "weight_scale", prefix + "comfy_quant")
+        present = [key in state_dict for key in quant_keys]
+        if any(present) and not all(present):
+            raise ValueError(
+                f"FastH3 VSA gate quantization metadata is incomplete: {prefix}"
+            )
+        if all(present):
+            gate["weight_scale"] = state_dict.pop(quant_keys[0])
+            gate["comfy_quant"] = state_dict.pop(quant_keys[1])
         gates.append(gate)
     leftovers = [key for key in state_dict if ".gate_compress." in key]
     if leftovers:
@@ -792,7 +885,12 @@ def _enable_vsa_runtime(model):
     options = model.model_options.setdefault("transformer_options", {})
     if options.get(FAST_H3_VSA_PATCH_FLAG):
         return model
-    if not all(hasattr(block.attn, "gate_compress") for block in diffusion_model.blocks):
+    installed_gates = all(
+        hasattr(block.attn, "gate_compress")
+        or f"diffusion_model.blocks.{index}.attn.gate_compress" in model.object_patches
+        for index, block in enumerate(diffusion_model.blocks)
+    )
+    if not installed_gates:
         raise ValueError("FastH3 VSA model is missing one or more compression gates")
 
     if torch.cuda.is_available():
@@ -847,6 +945,92 @@ def _enable_vsa_runtime(model):
         "sparsity=0.90 | gates=50 | kernel=architecture-specific VSA"
     )
     return model
+
+
+def _install_adapter_vsa_gates(model, gate_tensors, strength):
+    """Install adapter-only VSA modules as reversible ModelPatcher objects."""
+    diffusion_model = _loaded_h3_object(model)
+    expected = set(range(len(diffusion_model.blocks)))
+    if set(gate_tensors) != expected:
+        raise ValueError(
+            f"FastH3 VSA Adapter needs gates 0..{len(expected) - 1}; "
+            f"found {len(gate_tensors)}"
+        )
+    base_size = model.model_size()
+    added_bytes = 0
+    for index, block in enumerate(diffusion_model.blocks):
+        gate = comfy.ops.manual_cast.Linear(
+            diffusion_model.hidden_size,
+            block.attn.heads * block.attn.head_dim,
+            bias=False,
+            dtype=gate_tensors[index].dtype,
+            device=model.offload_device,
+        )
+        weight = gate_tensors[index].mul(float(strength)).to(
+            device=model.offload_device,
+            dtype=gate.weight.dtype,
+        )
+        missing, unexpected = gate.load_state_dict({"weight": weight}, strict=True)
+        if missing or unexpected:
+            raise ValueError(
+                f"FastH3 VSA gate {index} load mismatch: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        model.add_object_patch(
+            f"diffusion_model.blocks.{index}.attn.gate_compress", gate
+        )
+        added_bytes += gate.weight.numel() * gate.weight.element_size()
+    model.size = base_size + added_bytes
+    return model
+
+
+def apply_fasth3_adapter(model, adapter_path, strength=1.0):
+    """Apply all official FastH3 composite payload types to a native H3 MODEL."""
+    if not math.isfinite(float(strength)):
+        raise ValueError("FastH3 Adapter strength must be finite")
+    _loaded_h3_object(model)
+    metadata = model.model_options.get("transformer_options", {}).get("star7_h3", {})
+    if metadata.get("requires_vsa"):
+        raise ValueError(
+            "The connected model already contains FastH3 VSA gates; do not apply "
+            "the VSA Adapter a second time."
+        )
+
+    info, patches, gates = load_adapter_payload(adapter_path)
+    patched = model.clone()
+    applied = set(patched.add_patches(patches, float(strength)))
+    missing = sorted(str(key) for key in set(patches) - applied)
+    if missing:
+        raise ValueError(
+            "FastH3 Adapter does not match the connected H3 model; "
+            f"{len(missing)} patch target(s) are missing, first: {missing[:3]}"
+        )
+
+    if info.requires_vsa:
+        _install_adapter_vsa_gates(patched, gates, strength)
+        patched = _enable_vsa_runtime(patched)
+
+    options = patched.model_options.setdefault("transformer_options", {})
+    h3 = dict(options.get("star7_h3", {}))
+    h3.update({
+        "loader": h3.get("loader", "adapter-compatible"),
+        "version": NODE_VERSION,
+        "variant": "fasth3_vsa_adapter_v1" if info.requires_vsa else "fasth3_dense_adapter_v1",
+        "source": "official-composite-adapter",
+        "sampling_profile": "fasth3_4step_dmd_999_749_500_250_cfg1",
+        "requires_vsa": info.requires_vsa,
+        "adapter_format": info.metadata.get("format", "fastvideo-composite"),
+        "adapter_strength": float(strength),
+    })
+    options["star7_h3"] = h3
+    logging.info(
+        "[Star7 FastH3 Adapter] Applied official composite Adapter | "
+        "LoRA=%d | dense=%d | bias=%d | gates=%d | strength=%g | backend=%s",
+        info.low_rank_pairs, info.dense_deltas, info.bias_deltas,
+        info.replacement_gates, float(strength),
+        "VSA-H3" if info.requires_vsa else "dense",
+    )
+    return patched
 
 
 def _resolve_directory_source(name):
@@ -1028,10 +1212,11 @@ def _load_fasth3_directory(directory):
     model = _patch_h3_model(
         model,
         loader_native=True,
-        # The official VSA adapter is merged into the native full H3 base and
-        # therefore keeps native H3's MLP ordering.  Only HF Dense FastH3 uses
-        # the value-first MLP compatibility path.
-        fast_h3=not info.requires_vsa,
+        # Preview v1 VSA was produced by merging its Adapter into the native
+        # H3 base and keeps native MLP ordering.  The modular v0.x releases are
+        # exported from the Diffusers FastH3 model and retain value-first SwiGLU
+        # ordering even when their VSA gates are embedded in the checkpoint.
+        fast_h3=(not info.requires_vsa or info.variant.startswith("fasth3_vsa_v0_")),
         apply_fp16_exact=policy["apply_fp16_exact"],
     )
     if info.requires_vsa:
@@ -1111,6 +1296,9 @@ def _load_fasth3_vsa_single_file(unet_path, manifest):
 
 
 def load_model_with_policy(source_name):
+    # Run before model construction so the foreign __init__ hook never
+    # touches the new H3 instance.
+    _neutralize_process_wide_h3_conflicts()
     _restore_upstream_rope_dispatch()
     policy = detect_hardware_policy()
     if str(source_name).replace("\\", "/").endswith("/"):
@@ -1212,12 +1400,63 @@ class MiniMaxH3EnhancedLoaderStar7:
         return (load_model_with_policy(unet_name),)
 
 
+class MiniMaxH3FastH3AdapterLoaderStar7:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "adapter_name": (
+                    folder_paths.get_filename_list("loras"),
+                    {
+                        "tooltip": (
+                            "Official FastH3 composite Adapter containing LoRA, "
+                            "dense deltas, and optional VSA replacement gates."
+                        )
+                    },
+                ),
+                "strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "tooltip": "Published FastH3 scale is 1.0.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "load_adapter"
+    CATEGORY = "Star7/MiniMax H3"
+    SEARCH_ALIASES = [
+        "FastH3 Adapter 加载",
+        "FastH3 Adapter 载入",
+        "FastH3 适配器",
+        "FastH3 VSA Adapter",
+        "FastH3 composite adapter",
+    ]
+    DESCRIPTION = (
+        "Loads the official FastH3 composite Adapter without discarding its "
+        "dense deltas or replacement VSA gates. This is not a general LoRA loader."
+    )
+
+    def load_adapter(self, model, adapter_name, strength):
+        path = folder_paths.get_full_path_or_raise("loras", adapter_name)
+        return (apply_fasth3_adapter(model, path, strength),)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EnhancedLoaderStar7": MiniMaxH3EnhancedLoaderStar7,
+    "MiniMaxH3FastH3AdapterLoaderStar7": MiniMaxH3FastH3AdapterLoaderStar7,
     "MiniMaxH3VSASwitchStar7": MiniMaxH3VSASwitchStar7,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3EnhancedLoaderStar7": "MiniMax H3 Enhanced Loader - Star7",
+    "MiniMaxH3FastH3AdapterLoaderStar7": "MiniMax H3 FastH3 Adapter Loader - Star7",
     "MiniMaxH3VSASwitchStar7": "MiniMax H3 FastH3 VSA Switch - Star7",
 }

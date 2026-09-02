@@ -18,6 +18,15 @@ OFFICIAL_DENSE_MODEL_ID = (
 )
 INFERENCE_SCHEMA = "fasth3-inference-contract-v1"
 SAMPLING_PROFILE = "fasth3_4step_v1"
+OFFICIAL_RELEASES = {
+    OFFICIAL_DENSE_MODEL_ID: ("fasth3_dense_v1", SAMPLING_PROFILE),
+    "FastVideo/FastVideo-Minimax-FastH3-Preview-v0.1": (
+        "fasth3_dense_v0_1", "fasth3_4step_v0_1"
+    ),
+    "FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2": (
+        "fasth3_dense_v0_2", "fasth3_4step_v0_2"
+    ),
+}
 INDEX_NAME = "diffusion_pytorch_model.safetensors.index.json"
 QUANT_MANIFEST_NAME = "star7_fasth3_int8.json"
 VSA_QUANT_MANIFEST_NAME = "star7_fasth3_vsa_int8.json"
@@ -127,7 +136,9 @@ def detect_fasth3_checkpoint(path: os.PathLike | str) -> FastH3CheckpointInfo:
             ),
         )
 
-    inference = _read_json(root / "fastvideo_inference.json")
+    inference = _read_json(root / "fastvideo_inference.json", required=False)
+    if not inference:
+        inference = _inference_from_modular_index(root)
     content = _read_json(root / "checkpoint_content.json", required=False)
     metadata = _read_json(root / "checkpoint_metadata.json", required=False)
     quant_manifest = _read_json(root / QUANT_MANIFEST_NAME, required=False)
@@ -140,7 +151,10 @@ def detect_fasth3_checkpoint(path: os.PathLike | str) -> FastH3CheckpointInfo:
             "Directory checkpoint is not a FastVideo MiniMax H3 transformer "
             f"({_class_name(config)})."
         )
-    if inference.get("schema_version") != INFERENCE_SCHEMA:
+    if inference.get("schema_version") not in {
+        INFERENCE_SCHEMA, "fasth3-modular-preview-v0.1",
+        "fasth3-modular-preview-v0.2",
+    }:
         raise ValueError(
             "Unsupported or missing FastH3 inference contract: "
             f"{inference.get('schema_version')!r}"
@@ -151,6 +165,8 @@ def detect_fasth3_checkpoint(path: os.PathLike | str) -> FastH3CheckpointInfo:
     weight_map = {str(key): str(value) for key, value in weight_map.items()}
 
     model_id = str(inference.get("model_id", ""))
+    release = OFFICIAL_RELEASES.get(model_id)
+    sampling_profile = release[1] if release else SAMPLING_PROFILE
     backend = str(inference.get("attention_backend", "")).upper()
     has_vsa_keys = any(
         "to_gate_compress" in key or ".set_weight" in key
@@ -164,22 +180,25 @@ def detect_fasth3_checkpoint(path: os.PathLike | str) -> FastH3CheckpointInfo:
         or bool(metadata.get("requires_vsa"))
     )
     if requires_vsa:
-        variant = "fasth3_vsa_v1"
-    elif model_id == OFFICIAL_DENSE_MODEL_ID and backend in {
+        variant = (
+            release[0].replace("fasth3_dense_", "fasth3_vsa_")
+            if release else "fasth3_vsa_v1"
+        )
+    elif model_id in OFFICIAL_RELEASES and backend in {
         "FLASH_ATTN", "TORCH_SDPA", "DENSE"
     }:
-        variant = "fasth3_dense_v1"
+        variant, sampling_profile = OFFICIAL_RELEASES[model_id]
     else:
         raise ValueError(
-            "This Enhanced Loader version supports only the official FastH3 "
-            f"Dense Preview v1 checkpoint; detected model_id={model_id!r}, "
+            "This Enhanced Loader version supports only verified official FastH3 "
+            f"Preview releases; detected model_id={model_id!r}, "
             f"attention_backend={backend!r}."
         )
 
     _validate_sampling_contract(inference)
     _validate_architecture_config(config)
     if not native_quantized:
-        _validate_qkv_shard_locality(weight_map)
+        _validate_qkv_index(weight_map)
     return FastH3CheckpointInfo(
         root=root,
         transformer=transformer,
@@ -191,10 +210,40 @@ def detect_fasth3_checkpoint(path: os.PathLike | str) -> FastH3CheckpointInfo:
         variant=variant,
         requires_vsa=requires_vsa,
         attention_backend=backend.lower(),
-        sampling_profile=SAMPLING_PROFILE,
+        sampling_profile=sampling_profile,
         native_quantized=native_quantized,
         quantization=str(quant_manifest.get("quantization", "bf16-dense")),
     )
+
+
+def _inference_from_modular_index(root: Path) -> dict:
+    """Recognize official v0.x Diffusers releases without filename guessing."""
+    index = _read_json(root / "modular_model_index.json", required=False)
+    transformer = index.get("transformer")
+    model_id = ""
+    if isinstance(transformer, list):
+        for item in transformer:
+            if isinstance(item, dict):
+                model_id = str(item.get("pretrained_model_name_or_path", ""))
+                if model_id:
+                    break
+    release = OFFICIAL_RELEASES.get(model_id)
+    if release is None:
+        raise ValueError(
+            "FastH3 directory has no supported inference contract. Expected "
+            "fastvideo_inference.json or an official Preview v0.x modular index."
+        )
+    version = model_id.rsplit("-v", 1)[-1]
+    return {
+        "schema_version": f"fasth3-modular-preview-v{version}",
+        "model_id": model_id,
+        "task": "t2av",
+        "transformer_forwards": 4,
+        "num_inference_steps": 5,
+        "dmd_denoising_steps": [999, 749, 500, 250],
+        "guidance_scale": 1.0,
+        "attention_backend": "DENSE",
+    }
 
 
 def _class_name(config: Mapping) -> str:
@@ -247,7 +296,7 @@ def _validate_architecture_config(config: Mapping) -> None:
         raise ValueError("Unsupported FastH3 architecture: " + "; ".join(mismatches))
 
 
-def _validate_qkv_shard_locality(weight_map: Mapping[str, str]) -> None:
+def _validate_qkv_index(weight_map: Mapping[str, str]) -> None:
     groups: dict[str, dict[str, str]] = {}
     for key, shard in weight_map.items():
         match = re.match(r"^(.*\.attn)\.to_([qkv])\.weight$", key)
@@ -256,11 +305,6 @@ def _validate_qkv_shard_locality(weight_map: Mapping[str, str]) -> None:
     for prefix, parts in groups.items():
         if set(parts) != {"q", "k", "v"}:
             raise ValueError(f"Incomplete FastH3 QKV group in index: {prefix}")
-        if len(set(parts.values())) != 1:
-            raise ValueError(
-                f"FastH3 Q/K/V tensors span multiple shards and cannot be "
-                f"converted with bounded memory: {prefix}"
-            )
 
 
 _GLOBAL_KEYS = {
@@ -290,6 +334,7 @@ _BLOCK_SUFFIXES = {
     "attn.norm_q.weight": "attn.q_norm.weight",
     "attn.norm_k.weight": "attn.k_norm.weight",
     "attn.to_out.0.weight": "attn.out_proj.weight",
+    "attn.to_gate_compress.weight": "attn.gate_compress.weight",
     "ff.net.0.proj.weight": "mlp.fc1.weight",
     "ff.net.2.weight": "mlp.fc2.weight",
     "adaln_proj.linear.weight": "adaln_proj.linear.weight",
@@ -380,6 +425,11 @@ def validate_fasth3_state_dict(
 ) -> StateDictValidationReport:
     expected = expected_comfy_keys(config)
     actual = set(state_dict)
+    if any(".attn.gate_compress.weight" in key for key in actual):
+        expected.update(
+            f"blocks.{index}.attn.gate_compress.weight"
+            for index in range(int(config["num_layers"]))
+        )
     return StateDictValidationReport(
         source_keys=source_keys,
         converted_keys=len(actual),
@@ -407,6 +457,7 @@ def load_fasth3_shards(
         )
 
     output: dict[str, torch.Tensor] = {}
+    pending_qkv: dict[str, dict[str, torch.Tensor]] = {}
     unexpected: list[str] = []
     loaded_source_keys = 0
     for index, shard in enumerate(shards, start=1):
@@ -430,13 +481,39 @@ def load_fasth3_shards(
         if info.native_quantized:
             converted, unknown = source, ()
         else:
+            for key in list(source):
+                match = re.match(r"^(.*\.attn)\.to_([qkv])\.weight$", key)
+                if match:
+                    prefix = match.group(1)
+                    pending_qkv.setdefault(prefix, {})[match.group(2)] = source.pop(key)
             converted, unknown = convert_fasth3_state_dict(source)
+            for prefix in list(pending_qkv):
+                parts = pending_qkv[prefix]
+                if set(parts) != {"q", "k", "v"}:
+                    continue
+                block = _block_target(prefix + ".to_q.weight")
+                if block is None:
+                    raise ValueError(f"Unsupported FastH3 QKV group: {prefix}")
+                target_prefix, _suffix = block
+                shapes = {tuple(parts[name].shape) for name in ("q", "k", "v")}
+                if len(shapes) != 1:
+                    raise ValueError(
+                        f"FastH3 Q/K/V shapes differ at {prefix}: {sorted(shapes)}"
+                    )
+                converted[f"{target_prefix}.attn.qkv_proj.weight"] = torch.cat(
+                    (parts["q"], parts["k"], parts["v"]), dim=0
+                )
+                del pending_qkv[prefix]
         overlap = set(output).intersection(converted)
         if overlap:
             raise ValueError(f"Duplicate converted FastH3 keys: {sorted(overlap)[:3]}")
         output.update(converted)
         unexpected.extend(unknown)
         del source
+
+    if pending_qkv:
+        preview = sorted(pending_qkv)[:3]
+        raise ValueError(f"Incomplete FastH3 QKV groups after all shards: {preview}")
 
     if not info.native_quantized:
         output["rope.inv_freq"] = _rope_inv_freq(info.config)

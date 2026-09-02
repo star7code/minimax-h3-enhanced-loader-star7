@@ -18,7 +18,7 @@
 | 量化路径保持 | 保留 INT8、ConvRot、量化 layout 与 `_quantization_metadata`，不会因启用兼容保护而把整模强制展开为 FP16 |
 | 第三方模型兼容 | 支持结构符合 ComfyUI MiniMax H3 的第三方微调、融合、剪枝和量化完整模型 |
 | FP16 数值保护 | 修复部分架构上 H3 attention、残差与 MLP 的 FP16 溢出/非有限值问题，不接管采样器或注意力算法 |
-| FastH3 支持 | 支持官方 FastVideo 分片目录、Star7 原生单文件 INT8 Dense 模型及 VSA DataFree INT8 模型 |
+| FastH3 支持 | 支持官方 Preview v1 与 v0.1/v0.2 FastVideo 分片目录、Star7 原生单文件 INT8 Dense 模型及 VSA DataFree INT8 模型 |
 | SM75 VSA 加速 | 附带 VSA Switch；SM75 使用本项目自带的原生 Q64/K64 CUDA 路径，并保留 VSA 的 tile-64 路由与压缩分支 |
 | 标准模型输出 | 输出标准 `MODEL`，可单独使用，也可连接 LoRA、缓存节点和 MiniMax H3 分块节点 |
 
@@ -47,6 +47,8 @@ GGUF、GPTQ、bitsandbytes 等非 ComfyUI MixedPrecisionOps 格式不属于本�
 |---|---|---|
 | FastH3 Dense | 标准稠密 attention | 官方四步蒸馏模型及其原生 ComfyUI INT8 转换版 |
 | FastH3 VSA DataFree | tile-64 Video Sparse Attention | 将 VSA 适配权重与完整 H3 基座合并后的四步稀疏模型 |
+
+官方目录使用版本化契约识别：Preview v1 读取 `fastvideo_inference.json`，Preview v0.1/v0.2 读取 `modular_model_index.json` 中的官方仓库标识。节点不会仅凭文件夹名称把普通 H3 误判为 FastH3。
 
 FastH3 是完整的少步蒸馏 Transformer，不是运行时必须额外加载的 Turbo LoRA。节点会记录其采样契约，但不会修改工作流中的 scheduler、flow shift、guidance、VAE、文本编码器、帧数或分辨率。
 
@@ -89,6 +91,14 @@ FastH3 是完整的少步蒸馏 Transformer，不是运行时必须额外加载�
 输出仍是标准 ComfyUI `MODEL`，可以继续连接形状兼容的 H3 LoRA。LoRA 只会影响它实际补丁覆盖的层；ComfyUI 在低显存模式下可能为这些被补丁修改的量化层创建临时反量化权重，这是 LoRA 权重合成行为，不代表基础模型的量化路径失效。
 
 普通 H3 LoRA 可以连接 FastH3，但四步蒸馏权重与基础 H3 的响应不保证完全相同，应从较低强度开始验证。包含 `.diff`、`.diff_b`、`.set_weight` 的官方 FastH3 Adapter 不是普通 LoRA，不能按常规 LoRA 文件解释。
+
+本项目提供独立的 `MiniMax H3 FastH3 Adapter Loader - Star7`。它会先读取 safetensors 头部，完整校验低秩权重、Dense/Bias Delta 和 50 个 VSA replacement gate，再把全部载荷应用到标准 ComfyUI `MODEL`。检测到 gate 时会自动启用 VSA，不需要再连接 VSA Switch；普通 H3 LoRA 仍应使用普通 LoRA 加载器。
+
+```text
+Enhanced Loader -> FastH3 Adapter Loader -> SigmaShift -> [可选：Activation Chunk(existing)] -> Scheduler / Guider
+```
+
+官方发布强度为 `1.0`。Adapter 文件约 5 GB，且 VSA gate 本身会增加约 3.6 GiB BF16 模型权重；对 INT8 基座应用 Delta 时，ComfyUI 可能在模型装载阶段产生临时反量化权重，因此预先合并的 Star7 INT8 单文件仍是显存和启动速度更稳定的分发方案。
 
 ## FP16 数值保护
 
@@ -147,6 +157,14 @@ Enhanced Loader -> VSA Switch -> SigmaShift -> [可选：Activation Chunk(existi
 - class ID：`MiniMaxH3VSASwitchStar7`
 - 仅用于 FastH3 VSA 模型；
 - SM75 原生 VSA 二进制由本项目提供，不依赖分块项目的安装状态。
+
+### MiniMax H3 FastH3 Adapter Loader - Star7
+
+- class ID：`MiniMaxH3FastH3AdapterLoaderStar7`；
+- 仅加载 FastVideo 官方复合 Adapter，不替代普通 LoRA Loader；
+- 支持 LoRA、Dense Delta、Bias Delta 与 VSA replacement gate；
+- 缺失、未知或只含部分 gate 的 Adapter 会在读取大权重前明确终止；
+- VSA Adapter 自动启用正确的 VSA runtime，输出仍为标准 `MODEL`。
 
 ## 安装
 

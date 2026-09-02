@@ -16,7 +16,7 @@ This project incorporates the complete loading and numerical-protection function
 | Quantization preservation | Retains INT8, ConvRot, quantized layouts, and `_quantization_metadata` without expanding the full model to dense FP16 |
 | Third-party compatibility | Supports structurally compatible fine-tuned, merged, pruned, and quantized full H3 checkpoints |
 | FP16 protection | Protects H3 attention, residual, and MLP computations from FP16 overflow/non-finite values without replacing the sampler or attention backend |
-| FastH3 support | Loads official FastVideo shard directories, Star7 native single-file INT8 Dense models, and VSA DataFree INT8 models |
+| FastH3 support | Loads official Preview v1 and v0.1/v0.2 FastVideo shard directories, Star7 native single-file INT8 Dense models, and VSA DataFree INT8 models |
 | SM75 VSA acceleration | Includes a VSA Switch and a native Q64/K64 CUDA path that preserves tile-64 routing and the compressed branch |
 | Standard output | Produces a normal ComfyUI `MODEL` for standalone use or downstream LoRA, cache, and activation-chunk nodes |
 
@@ -43,6 +43,8 @@ GGUF, GPTQ, bitsandbytes, and other non-MixedPrecisionOps formats remain the res
 |---|---|---|
 | FastH3 Dense | Standard dense attention | Official four-step distilled checkpoints and native ComfyUI INT8 conversions |
 | FastH3 VSA DataFree | Tile-64 Video Sparse Attention | Complete four-step sparse checkpoints with the VSA adaptation merged into the H3 base |
+
+Official directories use versioned contract detection: Preview v1 is identified through `fastvideo_inference.json`, while Preview v0.1/v0.2 uses the official repository identity in `modular_model_index.json`. A folder name alone never classifies an arbitrary H3 checkpoint as FastH3.
 
 FastH3 is a complete few-step distilled Transformer, not a Turbo LoRA that must be loaded at runtime. The loader records its inference contract but does not change the workflow's scheduler, flow shift, guidance, VAE, text encoder, frame count, or resolution.
 
@@ -85,6 +87,14 @@ For quantized models, the loader preserves ComfyUI/MixedPrecisionOps weight obje
 The output remains a standard ComfyUI `MODEL`, so shape-compatible H3 LoRAs can be applied normally. ComfyUI may create temporary dequantized weights for layers directly modified by a LoRA in low-VRAM mode; this is weight-patch behavior and does not mean the untouched base model has lost its quantized path.
 
 A conventional base-H3 LoRA can be attached to FastH3, but its response is not guaranteed to match the four-step distilled checkpoint. Begin validation at a lower strength. Official FastH3 Adapter bundles containing `.diff`, `.diff_b`, or `.set_weight` are not conventional LoRA files.
+
+This project now includes `MiniMax H3 FastH3 Adapter Loader - Star7`. It performs header-first validation, then applies every low-rank, dense/bias delta, and all 50 VSA replacement gates to a standard ComfyUI `MODEL`. A gate payload enables VSA automatically; conventional H3 LoRAs should still use a conventional LoRA loader.
+
+```text
+Enhanced Loader -> FastH3 Adapter Loader -> SigmaShift -> [optional: Activation Chunk(existing)] -> Scheduler / Guider
+```
+
+The published strength is `1.0`. The Adapter is approximately 5 GB and its BF16 VSA gates add about 3.6 GiB of model weights. Applying deltas to an INT8 base can also create temporary dequantized weights during model loading, so a pre-merged Star7 INT8 single file remains the more predictable distribution path for VRAM and startup time.
 
 ## FP16 numerical protection
 
@@ -139,6 +149,14 @@ Enhanced Loader -> VSA Switch -> SigmaShift -> [optional: Activation Chunk(exist
 - Class ID: `MiniMaxH3VSASwitchStar7`
 - only for FastH3 VSA models;
 - the SM75 native VSA binary is bundled with this project and does not depend on the activation-chunk installation.
+
+### MiniMax H3 FastH3 Adapter Loader - Star7
+
+- Class ID: `MiniMaxH3FastH3AdapterLoaderStar7`;
+- accepts FastVideo composite Adapters, not conventional LoRAs;
+- preserves low-rank, dense delta, bias delta, and replacement-gate payloads;
+- rejects incomplete, unknown, or partial-gate payloads before model execution;
+- enables the matching VSA runtime automatically and keeps a standard `MODEL` output.
 
 ## Installation
 
