@@ -104,6 +104,8 @@ Enhanced Loader -> FastH3 Adapter Loader -> SigmaShift -> [可选：Activation C
 
 本项目继承并整合旧 FP16 修复节点的全部核心能力：
 
+- 兼容 Commercial TE-Speed-MiniMaxH3：仅在检测到商业 TE 运行时后保护 FP32 缓存/残差边界，H3 内部计算仍为 FP16/INT8；普通、原生 BF16及开源缓存路径不受影响；
+
 - condition projection 使用 FP32 输入，避免条件投影提前溢出；
 - attention `out_proj` 在安全缩放后执行 FP16 投影，再恢复 FP32 幅值；
 - residual gate、RMSNorm、modulation 和 SwiGLU 激活保留 FP32 中间计算；

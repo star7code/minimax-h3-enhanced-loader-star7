@@ -100,6 +100,8 @@ The published strength is `1.0`. The Adapter is approximately 5 GB and its BF16 
 
 The enhanced loader includes the former FP16 project's core protection path:
 
+- commercial TE-Speed-MiniMaxH3 compatibility that promotes only the detected TE cache/residual boundary to FP32 while keeping H3 recomputation in FP16/INT8; ordinary, native-BF16, and open-source cache paths remain untouched;
+
 - FP32 input for condition projection;
 - safely scaled FP16 attention `out_proj` with FP32 magnitude restoration;
 - FP32 intermediate computation for residual gates, RMSNorm, modulation, and SwiGLU;

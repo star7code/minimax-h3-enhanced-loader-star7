@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 - 2026-09-04
+
+- 新增 Commercial TE-Speed-MiniMaxH3 缓存加速兼容：只将 TE 缓存/残差
+  交界载体提升为 FP32，H3 block 内部重计算继续使用受保护 FP16/INT8。
+- 兼容包装仅在 FP16 保护路径安装，并通过商业 TE 运行时标记精确触发；普通
+  工作流、原生 BF16 与开源缓存路径不受影响。
+
 ## 1.3.0 - 2026-09-02
 
 - 新增 `MiniMax H3 FastH3 Adapter Loader - Star7`，完整支持 FastVideo

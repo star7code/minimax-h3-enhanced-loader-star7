@@ -6,6 +6,7 @@ import sys
 import time
 import weakref
 from collections import Counter
+from contextvars import ContextVar
 from types import MethodType
 
 import folder_paths
@@ -15,6 +16,7 @@ import torch.nn.functional as F
 import comfy.model_detection
 import comfy.model_management
 import comfy.ops
+import comfy.patcher_extension
 import comfy.sd
 import comfy.supported_models
 import comfy.utils
@@ -31,9 +33,11 @@ from . import fasth3_modulation
 from . import fasth3_vsa
 
 
-NODE_VERSION = "1.3.0"
+NODE_VERSION = "1.3.1"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
+TE_RUNTIME_KEY = "te_speed_minimax_h3_runtime"
+TE_BOUNDARY_WRAPPER_KEY = "star7_minimax_h3_fp16_commercial_te_boundary"
 FAST_H3_PATCH_FLAG = "star7_fasth3_mlp_layout_v2"
 FAST_H3_VSA_PATCH_FLAG = "star7_fasth3_vsa_v1"
 K_OUT_PROJ = 64.0
@@ -42,6 +46,7 @@ _AUTO_DETECT = object()
 FAST_H3_FUSED_INT8_FC2_ENV = "STAR7_FASTH3_FUSED_INT8_FC2"
 FAST_H3_FUSED_MODULATION_ENV = "STAR7_FASTH3_FUSED_MODULATION"
 _ROPE_DISPATCH_RESTORED = False
+_te_logged_runtime = ContextVar("star7_h3_enhanced_te_logged_runtime", default=None)
 
 _PROCESS_WIDE_CONFLICT_MARKERS = (
     "comfyui-minimax-h3-turing",
@@ -433,6 +438,51 @@ def _native_model_options(policy):
     return {}
 
 
+def _commercial_te_runtime(transformer_options):
+    if not isinstance(transformer_options, dict):
+        return None
+    return transformer_options.get(TE_RUNTIME_KEY)
+
+
+def _commercial_te_boundary_wrapper(
+    executor, x, timestep, context, transformer_options={}, *args, **kwargs
+):
+    """Protect only the commercial TE cache/residual boundary carrier."""
+    runtime = _commercial_te_runtime(transformer_options)
+    if runtime is None or not isinstance(context, torch.Tensor):
+        return executor(x, timestep, context, transformer_options, *args, **kwargs)
+
+    protected_context = context.to(dtype=torch.float32)
+    runtime_id = id(runtime)
+    if _te_logged_runtime.get() != runtime_id:
+        logging.info(
+            "[Star7 H3 Enhanced] Commercial TE compatibility active | "
+            "cache/residual boundary=FP32 | inner compute=FP16/INT8"
+        )
+        _te_logged_runtime.set(runtime_id)
+
+    return executor(
+        x, timestep, protected_context, transformer_options, *args, **kwargs
+    )
+
+
+def _install_commercial_te_boundary(patched):
+    transformer_options = patched.model_options.setdefault("transformer_options", {})
+    wrapper_type = comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL
+    installed = (
+        transformer_options.get("wrappers", {})
+        .get(wrapper_type, {})
+        .get(TE_BOUNDARY_WRAPPER_KEY, [])
+    )
+    if installed:
+        return
+    patched.add_wrapper_with_key(
+        wrapper_type,
+        TE_BOUNDARY_WRAPPER_KEY,
+        _commercial_te_boundary_wrapper,
+    )
+
+
 def _patch_h3_model(
     model, loader_native=False, *, fast_h3=False, apply_fp16_exact=True
 ):
@@ -446,6 +496,8 @@ def _patch_h3_model(
         raise TypeError("Connected model is not native ComfyUI MiniMax H3")
 
     transformer_options = patched.model_options.setdefault("transformer_options", {})
+    if apply_fp16_exact:
+        _install_commercial_te_boundary(patched)
     if not fast_h3 and transformer_options.get(PATCH_FLAG):
         logging.info("[Star7 H3 FP16] Patch is already present; skipping duplicate.")
         return patched
