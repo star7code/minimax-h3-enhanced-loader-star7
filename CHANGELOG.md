@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2 - 2026-09-04
+
+- Changed the third-party Turing conflict-isolation warning to plain English
+  so it remains readable in non-UTF-8 Windows consoles. The message explicitly
+  states that Star7 restored its native H3 path and that the conflicting plugin
+  must be disabled before restarting ComfyUI.
+
 ## 1.3.1 - 2026-09-04
 
 - 新增 Commercial TE-Speed-MiniMaxH3 缓存加速兼容：只将 TE 缓存/残差

@@ -33,7 +33,7 @@ from . import fasth3_modulation
 from . import fasth3_vsa
 
 
-NODE_VERSION = "1.3.1"
+NODE_VERSION = "1.3.2"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 TE_RUNTIME_KEY = "te_speed_minimax_h3_runtime"
@@ -99,9 +99,11 @@ def _neutralize_process_wide_h3_conflicts():
             restored += 1
 
     logging.warning(
-        "[Star7 H3 Compatibility] 检测到插件冲突：comfyui-minimax-h3-turing 已被屏蔽，"
-        "本次继续使用 Star7 路线（已恢复 %d 个全局 H3 方法）。请停用该 Turing 插件并重启；"
-        "仅绕过它的节点无效。",
+        "[Star7 H3 Compatibility] Conflicting plugin detected: "
+        "comfyui-minimax-h3-turing. Its process-wide H3 patches were "
+        "neutralized for this run (%d core methods restored); the Star7 native "
+        "path remains active. Disable the Turing plugin and restart ComfyUI. "
+        "Bypassing its workflow nodes is not sufficient.",
         restored,
     )
     minimax_module._star7_turing_plugin_neutralized = True
