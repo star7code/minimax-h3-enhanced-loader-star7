@@ -77,7 +77,7 @@ FastH3 是完整的少步蒸馏 Transformer，不是运行时必须额外加载�
 
 ## 示例工作流
 
-仓库提供四份正式工作流，通用 H3 与 FastH3 VSA 各有中英文版本：
+仓库提供四份正式工作流，通用 H3 与 FastH3 VSA 各有中英文版本；新版画布包含多合一条件载入、实时预览和默认关闭的一键人脸修复：
 
 - `MiniMax-H3-Enhanced-Loader-General-Star7.json`
 - `MiniMax-H3-Enhanced-Loader-General-Star7-English.json`

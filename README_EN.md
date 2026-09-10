@@ -73,7 +73,7 @@ Both are complete single-file Transformers and do not require users to download 
 
 ## Example workflows
 
-The repository includes four release workflows, with Chinese and English versions for both general H3 and FastH3 VSA:
+The repository includes four release workflows, with Chinese and English versions for both general H3 and FastH3 VSA. The updated canvas includes all-in-one conditioning, live preview, and optional face restoration disabled by default:
 
 - `MiniMax-H3-Enhanced-Loader-General-Star7.json`
 - `MiniMax-H3-Enhanced-Loader-General-Star7-English.json`
