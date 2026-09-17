@@ -613,6 +613,56 @@ def test_fp32_te_carrier_keeps_block_compute_inputs_fp16():
     assert result.dtype is torch.float32
     assert seen == {"attention": torch.float16, "mlp": torch.float16}
 
+    def sparse_attention(value, **_kwargs):
+        seen["override"] = value.dtype
+        return value
+
+    protected_forward(
+        Block(),
+        torch.ones(1, 2, dtype=torch.float32),
+        torch.zeros(1),
+        [],
+        None,
+        {module.TE_RUNTIME_KEY: object()},
+        attention=sparse_attention,
+    )
+    assert seen["override"] is torch.float16
+
+
+def test_vsa_segment_wrapper_forwards_comfyui_attention_override():
+    module = load_nodes()
+    seen = {}
+    override = object()
+
+    def original(_self, *_args, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    block = SimpleNamespace(attn=SimpleNamespace())
+    wrapped = module._vsa_block_segments(original)
+    result = wrapped(
+        block,
+        "x",
+        "t",
+        [(0, 1, 0)],
+        "rope",
+        {"mode": "vsa"},
+        attention=override,
+        future_option=True,
+    )
+
+    assert result == "ok"
+    assert seen == {
+        "transformer_options": {"mode": "vsa"},
+        "attention": override,
+        "future_option": True,
+    }
+    assert not hasattr(block.attn, "_star7_sla_mod_segments")
+
+    seen.clear()
+    wrapped(block, "x", "t", [(0, 1, 0)], "rope", {"mode": "legacy"})
+    assert seen == {"transformer_options": {"mode": "legacy"}}
+
 
 def test_quantized_model_preserves_native_dispatch():
     module = load_nodes()
@@ -843,6 +893,7 @@ if __name__ == "__main__":
     test_commercial_te_boundary_promotes_only_the_context_carrier()
     test_boundary_wrapper_leaves_other_paths_unchanged()
     test_fp32_te_carrier_keeps_block_compute_inputs_fp16()
+    test_vsa_segment_wrapper_forwards_comfyui_attention_override()
     test_quantized_model_preserves_native_dispatch()
     test_model_wrappers_are_weakly_bound_and_idempotent()
     test_quantization_summary_reports_convrot()

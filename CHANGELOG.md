@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.3 - 2026-09-18
+
+- 兼容 ComfyUI 0.36 向 H3 block 传入的 `attention` 覆盖函数：FP16 数值
+  保护会先完成输入归一化，再执行实际选择的 attention，不会把 VSA 或其他
+  block replacement 偷偷退回默认稠密注意力。
+- VSA segment 包装同步透传 `attention` 与后续关键字参数；未提供覆盖函数时
+  保持旧版 ComfyUI 调用方式，兼顾新旧前端及执行后端。
+
 ## 1.3.2 - 2026-09-04
 
 - Changed the third-party Turing conflict-isolation warning to plain English

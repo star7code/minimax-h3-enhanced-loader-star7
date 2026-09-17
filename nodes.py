@@ -33,7 +33,7 @@ from . import fasth3_modulation
 from . import fasth3_vsa
 
 
-NODE_VERSION = "1.3.2"
+NODE_VERSION = "1.3.3"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 TE_RUNTIME_KEY = "te_speed_minimax_h3_runtime"
@@ -299,7 +299,10 @@ def _mlp_forward(original_forward, *, fast_h3=False):
 
 
 def _block_forward(original_forward, minimax_module, *, fast_h3=False):
-    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}):
+    def forward(
+        self, x, t_emb, mod_segments, rope_freqs, transformer_options={},
+        attention=None, **_kwargs,
+    ):
         if x.dtype != torch.float32:
             x = x.to(torch.float32)
 
@@ -326,19 +329,20 @@ def _block_forward(original_forward, minimax_module, *, fast_h3=False):
             h = minimax_module._mod_scale_shift(
                 self.norm1(x), shift_msa, scale_msa, mod_segments
             ).to(torch.float16)
-        attention = self.attn(
+        attention_fn = self.attn if attention is None else attention
+        attention_output = attention_fn(
             h,
             rope_freqs=rope_freqs,
             transformer_options=transformer_options,
         )
-        attention = attention.to(torch.float32)
+        attention_output = attention_output.to(torch.float32)
         if fuse_modulation:
             with comfy.ops.CastBiasWeightContext(
                 self.norm2, x, offloadable=True
             ) as (weight, _):
                 x, h = fasth3_modulation.residual_gate_rmsnorm_modulate(
                     x,
-                    attention,
+                    attention_output,
                     gate_msa,
                     weight,
                     scale_mlp,
@@ -348,7 +352,9 @@ def _block_forward(original_forward, minimax_module, *, fast_h3=False):
                 )
             h = h.to(torch.float16)
         else:
-            x = minimax_module._mod_gate(x, gate_msa, attention, mod_segments)
+            x = minimax_module._mod_gate(
+                x, gate_msa, attention_output, mod_segments
+            )
             h = minimax_module._mod_scale_shift(
                 self.norm2(x), shift_mlp, scale_mlp, mod_segments
             ).to(torch.float16)
@@ -773,13 +779,20 @@ def _attach_vsa_gates(model, gate_states):
 def _vsa_block_segments(original_forward):
     original_forward = _weak_callable(original_forward)
 
-    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}):
+    def forward(
+        self, x, t_emb, mod_segments, rope_freqs, transformer_options={},
+        attention=None, **kwargs,
+    ):
         old_segments = getattr(self.attn, "_star7_sla_mod_segments", None)
         self.attn._star7_sla_mod_segments = mod_segments
         try:
+            call_kwargs = dict(kwargs)
+            call_kwargs["transformer_options"] = transformer_options
+            if attention is not None:
+                call_kwargs["attention"] = attention
             return original_forward(
                 x, t_emb, mod_segments, rope_freqs,
-                transformer_options=transformer_options,
+                **call_kwargs,
             )
         finally:
             if old_segments is None:
